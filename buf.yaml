@@ -1,0 +1,15 @@
+version: v1
+
+breaking:
+  use:
+    - FILE
+
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_VERSION_SUFFIX
+
+deps:
+  - buf.build/bufbuild/protovalidate

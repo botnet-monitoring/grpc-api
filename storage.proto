@@ -1,0 +1,284 @@
+syntax = "proto3";
+
+package grpc_api;
+
+
+import "buf/validate/validate.proto";
+import "common.proto";
+
+
+// The BMS Storage service definition.
+service BMSStorageService {
+  // The method to register a new monitoring session.
+  //
+  // This method gives you back a session token which is needed for all further requests corresponding to the session. Furthermore it (optionally) can tell the client the time of the last bot reply batch, failed try batch and edge batch for the last session of the same monitor (and thereby giving an indicator for the last successful insert).
+  //
+  // Note: This method needs authentication via providing the 256bit auth token as `auth-token-bin` and the monitor ID as `auth-monitor-id` in the metadata (last given value wins).
+  rpc RegisterSession (RegisterSessionRequest) returns (RegisterSessionResponse) {}
+
+  // The method to send a stream of dated bot replies.
+  //
+  // The server acknowledges the successful handling (receiving, processing, storing) of the sent batch by sending a response with the respective `batchID`.
+  // The client should cache the sent batch until the server acknowledges it explicitly (otherwise data might be lost).
+  //
+  // Note: This method needs (session) authentication via providing the 32bit session token as `session-token-bin` in the metadata (last given value wins).
+  //
+  // @todo: Document errors which can occur
+  rpc StoreDatedBotReplyBatch (stream StoreDatedBotReplyBatchRequest) returns (stream StoreDatedBotReplyBatchResponse) {}
+
+  // The method to send a stream of dated (failed) bot contact tries.
+  //
+  // The server acknowledges the successful handling (receiving, processing, storing) of the sent batch by sending a response with the respective `batchID`.
+  // The client should cache the sent batch until the server acknowledges it explicitly (otherwise data might be lost).
+  //
+  // Note: This method needs (session) authentication via providing the 32bit session token as `session-token-bin` in the metadata (last given value wins).
+  //
+  // @todo: Document errors which can occur
+  rpc StoreDatedFailedTryBatch (stream StoreDatedFailedTryBatchRequest) returns (stream StoreDatedFailedTryBatchResponse) {}
+
+  // The method to send a stream of dated bot edges.
+  //
+  // The server acknowledges the successful handling (receiving, processing, storing) of the sent batch by sending a response with the respective `batchID`.
+  // The client should cache the sent batch until the server acknowledges it explicitly (otherwise data might be lost).
+  //
+  // Note: This method needs (session) authentication via providing the 32bit session token as `session-token-bin` in the metadata (last given value wins).
+  // Note: The server will not accept batches with more than 10000 bot replies.
+  //
+  // @todo: Document errors which can occur
+  rpc StoreDatedEdgeBatch (stream StoreDatedEdgeBatchRequest) returns (stream StoreDatedEdgeBatchResponse) {}
+
+  // The method to disconnect the current monitoring session.
+  //
+  // Note: This method needs (session) authentication via providing the 32bit session token as `session-token-bin` in the metadata (last given value wins).
+  // Note: The server will not accept batches with more than 10000 edges.
+  //
+  // @todo: Document errors which can occur
+  rpc Disconnect (DisconnectRequest) returns (DisconnectResponse) {}
+}
+
+
+// A type for carrying the 32bit session token.
+message SessionToken {
+  // Actual value (required).
+  bytes token = 1 [(buf.validate.field).bytes = {len: 4}];
+}
+
+// Possible reasons a client wants to end the session with.
+enum DisconnectReason {
+  // The client wants to specify no reason to end the session.
+  DISCONNECT_REASON_UNSPECIFIED = 0;
+
+  // The client has done its purpose and thereby wants to end the session.
+  DISCONNECT_REASON_FINISHED = 1;
+
+  // The clients wants to end the session in order to reconnect soon.
+  DISCONNECT_REASON_BE_RIGHT_BACK = 2;
+
+  // The clients wants to end the session in order to reconnect soon with a new configuration.
+  DISCONNECT_REASON_BE_RIGHT_BACK_WITH_NEW_CONFIG = 3;
+
+  // The client had some error and thereby wants to the the session.
+  DISCONNECT_REASON_CLIENT_ERROR = 4;
+
+  // The client wants to end the session because of some other reason.
+  DISCONNECT_REASON_OTHER = 5;
+}
+
+
+// The request used for registering a monitoring session.
+message RegisterSessionRequest {
+  // The botnet id the current monitoring session is monitoring (required).
+  string botnet_id = 1;
+
+  // The campaign id the current monitoring session should be part of (optional).
+  optional string campaign_id = 2;
+
+  // The used frequency for crawling/populating for the current monitoring session (optional).
+  optional uint32 frequency = 3;
+
+  // The public IP address the monitor uses for the current monitoring session (optional).
+  optional IPAddress public_ip = 4;
+
+  // The port the monitoring session uses to listen for other bots (optional).
+  optional Port monitor_port = 5;
+
+  // Potential further configuration data for the current monitoring session (optional).
+  optional JSON config_json = 6;
+}
+
+// The response the server sends when receiving a session registration request.
+message RegisterSessionResponse {
+  // The 32bit session token for all further requests of this session (required).
+  SessionToken session_token = 1 [(buf.validate.field).required = true];
+
+  // The timeout in seconds after which the server automatically ends the session (required).
+  //
+  // Precisely means: The session expires if the time since last message from the client is more than the timeout.
+  uint32 session_timeout = 2;
+
+  // The timestamp of the last successfully inserted bot reply (optional).
+  //
+  // Not set when there is no last entry (or the server might not want to add it for other reasons).
+  optional Timestamp last_inserted_bot_reply = 3;
+
+  // The timestamp of the last successfully inserted failed try (optional).
+  //
+  // Not set when there is no last entry (or the server might not want to add it for other reasons).
+  optional Timestamp last_inserted_failed_try = 4;
+
+  // The timestamp of the last successfully inserted edge (optional).
+  //
+  // Not set when there is no last entry (or the server might not want to add it for other reasons).
+  optional Timestamp last_inserted_edge = 5;
+}
+
+// The type which holds exactly one bot reply.
+//
+// This message will be just used to fill batches which in turn will be sent.
+message DatedBotReply {
+  // The timestamp the bot reply was observed (required).
+  Timestamp timestamp = 1;
+
+  // The bot's ID, if any in the respective botnet (optional).
+  optional string bot_id = 2;
+
+  // The IP address of the bot (required).
+  IPAddress ip = 3 [(buf.validate.field).required = true];
+
+  // The port of the bot (required).
+  Port port = 4 [(buf.validate.field).required = true];
+
+  // Potential other interesting data observed with the bot reply (optional).
+  optional JSON other_data = 5;
+}
+
+// A batch of dated bot replies.
+//
+// This is the message which actually will be streamed to the server.
+message StoreDatedBotReplyBatchRequest {
+  // The ID to identify this batch (required).
+  //
+  // This ID will be used by the server to later reference this batch.
+  //
+  // It is the responsibility of the client to use this ID wisely, the server will not verify uniqueness and will just use the ID it got from the client to reference batches.
+  // It is recommended to simply use sequentially incrementing numbers per session.
+  uint32 batch_id = 1;
+
+  // The bot replies to include in this batch (required).
+  repeated DatedBotReply replies = 2;
+}
+
+// The response the server sends when receiving a dated bot reply batch.
+message StoreDatedBotReplyBatchResponse {
+  // The ID of the batch which was successfully received (required).
+  //
+  // The referenced batch can now be removed from the clients cache.
+  uint32 batch_id = 1;
+}
+
+// The type which holds exactly one failed bot contact try.
+//
+// This message will be just used to fill batches which in turn will be sent.
+message DatedFailedTry {
+  // The timestamp the (failed) bot contact try was attempted (required).
+  Timestamp timestamp = 1;
+
+  // The bot's ID, if any in the respective botnet (optional).
+  optional string bot_id = 2;
+
+  // The IP address of the bot (required).
+  IPAddress ip = 3 [(buf.validate.field).required = true];
+
+  // The port of the bot (required).
+  Port port = 4 [(buf.validate.field).required = true];
+
+  // The the reason the contacted bot could not be reached (optional).
+  optional string reason = 5;
+
+  // Potential other interesting data observed with the (failed) bot contact try (optional).
+  optional JSON other_data = 6;
+}
+
+// A batch of dated (failed) bot contact tries.
+//
+// This is the message which actually will be streamed to the server.
+message StoreDatedFailedTryBatchRequest {
+  // The ID to identify this batch (required).
+  //
+  // This ID will be used by the server to later reference this batch.
+  //
+  // It is the responsibility of the client to use this ID wisely, the server will not verify uniqueness and will just use the ID it got from the client to reference batches.
+  // It is recommended to simply use sequentially incrementing numbers per session.
+  uint32 batch_id = 1;
+
+  // The (failed) bot contact tries to include in this batch (required).
+  repeated DatedFailedTry tries = 2;
+}
+
+// The response the server sends when receiving a dated (failed) bot contact try batch.
+message StoreDatedFailedTryBatchResponse {
+  // The ID of the batch which was successfully received (required).
+  //
+  // The referenced batch can now be removed from the clients cache.
+  uint32 batch_id = 1;
+}
+
+// The type which holds exactly one edge.
+//
+// This message will be just used to fill batches which in turn will be sent.
+message DatedEdge {
+  // The timestamp the edge was observed (required).
+  Timestamp timestamp = 1;
+
+  // The source bot's ID, if any in the respective botnet (optional).
+  optional string src_bot_id = 2;
+
+  // The IP address of the source bot (required).
+  IPAddress src_ip = 3 [(buf.validate.field).required = true];
+
+  // The port of the source bot (required).
+  Port src_port = 4 [(buf.validate.field).required = true];
+
+  // The destination bot's ID, if any in the respective botnet (optional).
+  optional string dst_bot_id = 5;
+
+  // The IP address of the destination bot (required).
+  IPAddress dst_ip = 6 [(buf.validate.field).required = true];
+
+  // The port of the destination bot (required).
+  Port dst_port = 7 [(buf.validate.field).required = true];
+}
+
+// A batch of dated edges.
+//
+// This is the message which actually will be streamed to the server.
+message StoreDatedEdgeBatchRequest {
+  // The ID to identify this batch (required).
+  //
+  // This ID will be used by the server to later reference this batch.
+  //
+  // It is the responsibility of the client to use this ID wisely, the server will not verify uniqueness and will just use the ID it got from the client to reference batches.
+  // It is recommended to simply use sequentially incrementing numbers per session.
+  uint32 batch_id = 1;
+
+  // The edges to include in this batch (required).
+  repeated DatedEdge edges = 2;
+}
+
+// The response the server sends when receiving a dated edge batch.
+message StoreDatedEdgeBatchResponse {
+  // The ID of the batch which was successfully received (required).
+  //
+  // The referenced batch can now be removed from the clients cache.
+  uint32 batch_id = 1;
+}
+
+// The request the client sends when initiating a disconnect (which in turn explicitly ends the session).
+message DisconnectRequest {
+  // The reason the clients wants to end the session due (optional).
+  DisconnectReason reason = 1;
+}
+
+// The response the server sends when receiving a disconnect request.
+message DisconnectResponse {
+}

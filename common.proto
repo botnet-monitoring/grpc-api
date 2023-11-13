@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package grpc_api;
+
+
+import "buf/validate/validate.proto";
+
+
+// A type for carrying a timestamp with nano second resolution.
+//
+// Note: Although this has a nano second resolution, the BMS database stores time only in micro second resolution.
+message Timestamp {
+  // Seconds since the Unix epoch (1970-01-01) (required).
+  int64 unix_seconds = 1 [(buf.validate.field).int64 = {gte: 0}];
+
+  // Nano seconds to add to the given unix seconds (optional).
+  int64 unix_nano_seconds = 2 [(buf.validate.field).int64 = {gte: 0}];
+}
+
+// A type for carrying an IPv4 address.
+message IPv4Address {
+  // Actual value (required).
+  fixed32 address = 1;
+}
+
+// A type for carrying an IPv6 address.
+message IPv6Address {
+  // Actual value (required).
+  bytes address = 1 [(buf.validate.field).bytes = {len: 16}];
+}
+
+// A type for carrying an IPv4 or an IPv6 address.
+message IPAddress {
+  // Actual value (required).
+  oneof address {
+    IPv4Address v4 = 1;
+    IPv6Address v6 = 2;
+  }
+}
+
+// A type for carrying a valid port number.
+//
+// Note: Excludes port 0, because it cannot be used to communicate externally.
+message Port {
+  // Actual value (required).
+  uint32 port = 1 [(buf.validate.field).uint32 = {lt: 65536}];
+}
+
+// A type for carrying a JSON string.
+//
+// Actually this type has no validator, but the server still checks if the provided string is valid JSON.
+message JSON {
+  // Actual value (required).
+  string json_string = 1;
+}
